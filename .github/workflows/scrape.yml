@@ -3,10 +3,10 @@ name: Run Playwright Scraper
 
 # ワークフローが実行されるトリガー
 on:
-  # 'main' ブランチへのpush時に実行
+  # 'master' ブランチへのpush時に実行
   push:
     branches:
-      - main
+      - master
   # 手動実行も可能にする
   workflow_dispatch:
 
