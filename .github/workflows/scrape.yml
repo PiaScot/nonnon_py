@@ -1,0 +1,53 @@
+# ワークフローの名前
+name: Run Playwright Scraper
+
+# ワークフローが実行されるトリガー
+on:
+  # 'main' ブランチへのpush時に実行
+  push:
+    branches:
+      - main
+  # 手動実行も可能にする
+  workflow_dispatch:
+
+# 実行されるジョブを定義
+jobs:
+  scrape:
+    # 最新のUbuntu環境で実行
+    runs-on: ubuntu-latest
+
+    steps:
+      # ステップ1: リポジトリのコードをチェックアウトする
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      # ステップ2: Python環境をセットアップする
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11' # 使用するPythonのバージョン
+
+      # ステップ3: Pythonの依存ライブラリをインストールする
+      # requirements.txtを使うのがベストプラクティスですが、直接指定も可能です
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install beautifulsoup4 lxml playwright
+
+      # ステップ4: PlaywrightのブラウザとOS依存関係をインストールする
+      # '--with-deps' はLinux環境で必要なシステムライブラリを自動で入れてくれる重要なオプションです
+      - name: Install Playwright Browsers
+        run: playwright install --with-deps
+
+      # ステップ5: Pythonスクリプトを実行する
+      # 'run_scraper.py' の部分は、実際のファイル名に必ず変更してください
+      - name: Run scraper script
+        run: python main.py
+
+      # (オプション) ステップ6: 結果のHTMLファイルをアーティファクトとして保存する
+      # スクリプト内でファイル出力するようにした場合、その結果をダウンロード可能にします
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: scraped-html
+          path: html/ # スクリプト内のOUTPUT_FILEで指定したパス
