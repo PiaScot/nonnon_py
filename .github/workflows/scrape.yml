@@ -22,7 +22,7 @@ jobs:
         uses: astral-sh/setup-uv@v6
 
       - name: Install dependencies
-        run: uv pip sync
+        run: uv sync
 
       - name: Install Playwright browsers
         run: playwright install chromium
