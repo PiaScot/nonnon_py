@@ -9,3 +9,25 @@ wheels/
 # Virtual environments
 .venv
 .envrc
+.env
+.ruff_cache
+.pytest_cache
+
+# dev tools
+diagnostics.py
+cli_search.py
+next_page_check.py
+
+# other
+README.md
+tmp.html
+trace.zip
+*.log
+/results/
+/supabase/
+/instructions/
+/trace/
+/tests/
+/tmp/
+
+
