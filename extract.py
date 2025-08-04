@@ -7,35 +7,36 @@ from logger import logger
 from playw import ScraperService
 from utils import fetch_html_text
 
+
 LAZY_ATTRS = ["data-src", "data-lazy-src", "data-original"]
 MEDIA_RE = re.compile(r"\.(jpe?g|png|gif|webp|mp4|webm|mov|m4v)(\?.*)?$", re.IGNORECASE)
 VIDEO_RE = re.compile(r"\.(mp4|webm|mov|m4v)$", re.IGNORECASE)
 
 
-def _extract_imgur_id(iframe_tag: element.Tag) -> Optional[str]:
+def _extract_imgur_id(wrapper_tag: element.Tag) -> Optional[str]:
     """
-    Attempts to extract an Imgur image ID from an iframe's attributes.
-    Tries src, id, and class attributes in order of reliability.
+    Attempts to extract an Imgur image ID from an specified tag's attributes.
+    Tries src, id, data-id, and class attributes in order of reliability.
     """
-    src = iframe_tag.get("src")
+    src = wrapper_tag.get("src")
     if isinstance(src, str):
         match = re.search(r"imgur\.com/([a-zA-Z0-9]{5,})", src)
         if match:
             return match.group(1)
 
-    id_attr = iframe_tag.get("id")
+    id_attr = wrapper_tag.get("id")
     if isinstance(id_attr, str):
         parts = id_attr.split("-")
         if len(parts) > 1 and len(parts[-1]) >= 5 and parts[-1].isalnum():
             return parts[-1]
 
-    id_attr = iframe_tag.get("data-id")
+    id_attr = wrapper_tag.get("data-id")
     if isinstance(id_attr, str):
         parts = id_attr.split("-")
         if len(parts) > 1 and len(parts[-1]) >= 5 and parts[-1].isalnum():
             return parts[-1]
 
-    class_list = iframe_tag.get("class", "")
+    class_list = wrapper_tag.get("class", "")
     if class_list is None:
         return None
 
@@ -54,7 +55,7 @@ def _create_imgur_img_tag(soup: BeautifulSoup, img_id: str) -> Tag:
         "img",
         attrs={
             "src": f"https://i.imgur.com/{img_id}.jpeg",
-            "alt": "imgur の画像",
+            "alt": f"imgur ID:{img_id} image",
             "loading": "lazy",
             "referrerpolicy": "no-referrer",
             "style": "max-width:100%;height:auto;display:block",
@@ -79,23 +80,13 @@ def _unwrap_imgur(soup: BeautifulSoup) -> None:
         if not isinstance(blockquote, Tag):
             continue
 
-        # data-id属性から直接IDを取得
         img_id_val = blockquote.get("data-id")
 
-        # IDが文字列として取得できた場合のみ処理
         if isinstance(img_id_val, str) and img_id_val.strip():
             img_id = img_id_val.strip()
 
-            # <img>タグを作成
             new_img = _create_imgur_img_tag(soup, img_id)
             blockquote.replace_with(new_img)
-
-
-def _get_proxied_url(original_url: str) -> str:
-    """If the URL is http, convert it to a proxied URL."""
-    if original_url and original_url.startswith("http://"):
-        return f"/api/image-proxy?url={original_url}"
-    return original_url
 
 
 def _find_valid_media_url(tag: element.Tag) -> str:
@@ -188,11 +179,10 @@ def _normalize_images(soup: BeautifulSoup) -> None:
             img.decompose()
             continue
 
-        proxied_src = _get_proxied_url(src)
         new_img = soup.new_tag(
             "img",
             attrs={
-                "src": proxied_src,
+                "src": src,
                 "loading": "lazy",
                 "referrerpolicy": "no-referrer",
                 "style": "max-width:100%;height:auto;display:block",
@@ -312,13 +302,7 @@ def _unwrap_anchored_media(soup: BeautifulSoup):
                         break
 
         if url and MEDIA_RE.search(url):
-            proxied_url = _get_proxied_url(url)
-            if VIDEO_RE.search(proxied_url):
-                replacement_html = f'<video src="{proxied_url}" class="my-formatted" referrerpolicy="no-referrer" controls playsinline style="width:100%;height:auto;display:block;"></video>'
-            else:
-                replacement_html = f'<img src="{proxied_url}" class="my-formatted" referrerpolicy="no-referrer" style="width:100%;height:auto;display:block;" loading="lazy" />'
-
-            new_tag = BeautifulSoup(replacement_html, "html.parser").contents[0]
+            new_tag = BeautifulSoup(url, "html.parser").contents[0]
             elem.replace_with(new_tag)
 
     for video_el in soup.select("video:has(source)"):
@@ -330,9 +314,8 @@ def _unwrap_anchored_media(soup: BeautifulSoup):
             src_val = source.get("src")
             if isinstance(src_val, str):
                 source_src = src_val.strip()
-                proxied_url = _get_proxied_url(source_src)
 
-                video_el["src"] = proxied_url
+                video_el["src"] = source_src
                 class_list = video_el.get("class")
                 if class_list is None:
                     class_list = []

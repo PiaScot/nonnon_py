@@ -70,7 +70,7 @@ async def _get_article_by_id(id: int) -> Optional[Article]:
     res = (
         await supabase.table(ARTICLE_TABLE).select("*").eq("id", id).limit(1).execute()
     )
-    if res.data is None:
+    if not res.data:
         return None
 
     article_data = res.data[0]

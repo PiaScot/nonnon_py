@@ -17,6 +17,7 @@ wheels/
 diagnostics.py
 cli_search.py
 next_page_check.py
+analysis_bs.py
 
 # other
 README.md
