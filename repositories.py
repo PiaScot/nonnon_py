@@ -223,6 +223,29 @@ async def _get_random_articles_by_site_id(
         return []
 
 
+async def _get_latest_n_articles_by_site_id(
+    site_id: int, n: int
+) -> List[Article]:
+    """
+    指定されたサイトIDの最新記事をn件取得する
+    """
+    supabase = await supabase_manager.get_client()
+    res = (
+        await supabase.table(ARTICLE_TABLE)
+        .select("*")
+        .eq("site_id", site_id)
+        .order("pub_date", desc=True)
+        .limit(n)
+        .execute()
+    )
+
+    if not res.data:
+        return []
+
+    articles_adapter = TypeAdapter(List[Article])
+    return articles_adapter.validate_python(res.data)
+
+
 ### CRUD SITE
 
 

@@ -302,7 +302,28 @@ def _unwrap_anchored_media(soup: BeautifulSoup):
                         break
 
         if url and MEDIA_RE.search(url):
-            new_tag = BeautifulSoup(url, "html.parser").contents[0]
+            if VIDEO_RE.search(url):
+                new_tag = soup.new_tag(
+                    "video",
+                    attrs={
+                        "src": url,
+                        "controls": "",
+                        "playsinline": "",
+                        "style": "width:100%;height:auto;display:block;",
+                        "class": "my-formatted",
+                    },
+                )
+            else:
+                new_tag = soup.new_tag(
+                    "img",
+                    attrs={
+                        "src": url,
+                        "loading": "lazy",
+                        "referrerpolicy": "no-referrer",
+                        "style": "max-width:100%;height:auto;display:block",
+                        "class": "my-formatted",
+                    },
+                )
             elem.replace_with(new_tag)
 
     for video_el in soup.select("video:has(source)"):
