@@ -6,11 +6,7 @@ from bs4.element import NavigableString, PageElement
 from logger import logger
 from playw import ScraperService
 from utils import fetch_html_text
-
-
-LAZY_ATTRS = ["data-src", "data-lazy-src", "data-original"]
-MEDIA_RE = re.compile(r"\.(jpe?g|png|gif|webp|mp4|webm|mov|m4v)(\?.*)?$", re.IGNORECASE)
-VIDEO_RE = re.compile(r"\.(mp4|webm|mov|m4v)$", re.IGNORECASE)
+import config
 
 
 def _extract_imgur_id(wrapper_tag: element.Tag) -> Optional[str]:
@@ -89,20 +85,62 @@ def _unwrap_imgur(soup: BeautifulSoup) -> None:
             blockquote.replace_with(new_img)
 
 
+def _normalize_iframes(soup: BeautifulSoup, allow_hosts: Set[str]) -> None:
+    """
+    Finds all iframes from allowed hosts and makes them responsive.
+    """
+    # src属性を持つすべてのiframeを見つける
+    for iframe in soup.find_all("iframe", src=True):
+        if not isinstance(iframe, element.Tag):
+            continue
+
+        src = iframe.get("src")
+        if not isinstance(src, str) or not src.strip():
+            continue
+
+        try:
+            # srcからホスト名を取得
+            hostname = urlparse(src.strip()).hostname
+
+            # ホスト名が存在し、かつ許可されたホストのリストに含まれているかチェック
+            if hostname and hostname in allow_hosts:
+                # logger.info(f"_normalize_iframes: hostname => {hostname}")
+                if hostname == "platform.twitter.com":
+                    # logger.info(
+                    #     "Skip _normalize_iframes due to twitter iframe should be process with playw.render_twitter_card"
+                    # )
+                    continue
+
+                logger.info(f"Normalizing iframe from allowed host: {hostname}")
+
+                # width, height, style 属性をレスポンシブな値に上書き・設定する
+                iframe["width"] = "100%"
+                iframe["height"] = "auto"
+
+                # アスペクト比を16:9に設定し、レスポンシブ対応させる
+                # 多くの動画埋め込みで一般的な比率のため、デフォルトとして採用
+                iframe["style"] = "aspect-ratio: 16 / 9; width: 100%; height: auto;"
+
+        except Exception as e:
+            logger.warning(f"Could not parse iframe src: {src} - Error: {e}")
+
+
 def _find_valid_media_url(tag: element.Tag) -> str:
     """Finds a valid media URL from lazy loading attributes or src."""
     try:
-        for attr in LAZY_ATTRS:
+        for attr in config.LAZY_ATTRS:
             lazy_src = tag.get(attr)
             if isinstance(lazy_src, str):
                 clean_src = lazy_src.strip()
-                if MEDIA_RE.search(clean_src):
+                if config.MEDIA_RE.search(clean_src):
                     return clean_src
 
         src = tag.get("src")
         if isinstance(src, str):
             clean_src = src.strip()
-            if MEDIA_RE.search(clean_src) and not clean_src.startswith("data:image"):
+            if config.MEDIA_RE.search(clean_src) and not clean_src.startswith(
+                "data:image"
+            ):
                 return clean_src
 
     except Exception as e:
@@ -169,7 +207,13 @@ def _remove_selectors(soup: BeautifulSoup, selectors: List[str]) -> None:
 
 
 def _normalize_images(soup: BeautifulSoup) -> None:
-    """Normalizes all <img> tags."""
+    """
+    Normalizes all media tags (img, video).
+    Finds non-formatted <img> tags and replaces them with appropriate
+    <video> or <img> tags based on the source URL.
+    """
+    # 関数名が実態と合わなくなるため、docstringも修正するとより親切です。
+
     for img in soup.find_all("img", class_=lambda c: c != "my-formatted"):
         if not isinstance(img, element.Tag):
             continue
@@ -179,17 +223,37 @@ def _normalize_images(soup: BeautifulSoup) -> None:
             img.decompose()
             continue
 
-        new_img = soup.new_tag(
-            "img",
-            attrs={
-                "src": src,
-                "loading": "lazy",
-                "referrerpolicy": "no-referrer",
-                "style": "max-width:100%;height:auto;display:block",
-                "class": "my-formatted",
-            },
-        )
-        img.replace_with(new_img)
+        # --- ここから修正 ---
+
+        # URLがビデオかどうかを判定
+        if config.VIDEO_RE.search(src):
+            # ビデオの場合、<video>タグを生成する
+            new_tag = soup.new_tag(
+                "video",
+                attrs={
+                    "src": src,
+                    "controls": "",  # controls属性を追加
+                    "playsinline": "",
+                    "style": "width:100%;height:auto;display:block;",
+                    "class": "my-formatted",
+                    "loading": "lazy",
+                    "referrerpolicy": "no-referrer",
+                },
+            )
+        else:
+            # 画像の場合、既存のロジック通り<img>タグを生成する
+            new_tag = soup.new_tag(
+                "img",
+                attrs={
+                    "src": src,
+                    "loading": "lazy",
+                    "referrerpolicy": "no-referrer",
+                    "style": "max-width:100%;height:auto;display:block",
+                    "class": "my-formatted",
+                },
+            )
+
+        img.replace_with(new_tag)
 
 
 def _cleanup_empty_tags(soup: BeautifulSoup) -> None:
@@ -202,28 +266,80 @@ def _cleanup_empty_tags(soup: BeautifulSoup) -> None:
             p.decompose()
 
 
+def _collapse_excessive_brs(soup: BeautifulSoup, max_consecutive: int = 2) -> None:
+    """
+    Finds consecutive <br> tags and collapses them to a specified maximum.
+    """
+    # すべての <br> タグを一度に見つける
+    br_tags = soup.find_all("br")
+
+    # 連続する<br>タグのシーケンスを検出して処理
+    if not br_tags:
+        return
+
+    # 連続する<br>タグのグループを保持するリスト
+    consecutive_groups = []
+    current_group = [br_tags[0]]
+
+    for i in range(1, len(br_tags)):
+        prev_br = br_tags[i - 1]
+        current_br = br_tags[i]
+
+        # 間に他の要素がなく、隣接しているかチェック
+        # find_next_sibling() は間の空白文字などをスキップしてくれる
+        if prev_br.find_next_sibling() == current_br:
+            current_group.append(current_br)
+        else:
+            # 連続が途切れたら、グループを保存して新しいグループを開始
+            if len(current_group) > 1:
+                consecutive_groups.append(current_group)
+            current_group = [current_br]
+
+    # 最後のグループをチェック
+    if len(current_group) > 1:
+        consecutive_groups.append(current_group)
+
+    # 各グループで、最大数を超える<br>タグを削除
+    for group in consecutive_groups:
+        if len(group) > max_consecutive:
+            # 最初のmax_consecutive個を残し、残りを削除
+            for br_to_remove in group[max_consecutive:]:
+                br_to_remove.decompose()
+
+
 async def _convert_twitter_cards(
     soup: BeautifulSoup, scraper_service: ScraperService
 ) -> None:
-    """Finds all un-rendered twitter-tweets and replaces them one by one."""
+    """
+    Finds all un-rendered twitter-tweets and replaces them one by one.
+    The widgets.js script is injected programmatically as it may not exist in the source HTML.
+    """
 
-    twitter_script = soup.find(
-        "script", attrs={"src": "https://platform.twitter.com/widgets.js"}
-    )
-    if not twitter_script:
-        return
-
-    script_html = str(twitter_script)
     blockquotes_to_process = list(soup.find_all("blockquote", class_="twitter-tweet"))
     if not blockquotes_to_process:
         return
+
+    twitter_script_url = "https://platform.twitter.com/widgets.js"
+    script_html_to_inject = (
+        f'<script async src="{twitter_script_url}" charset="utf-8"></script>'
+    )
+
+    # logger.info(
+    #     f"Found {len(blockquotes_to_process)} twitter-tweet blockquotes to process."
+    # )
 
     for blockquote in blockquotes_to_process:
         if not isinstance(blockquote, Tag):
             continue
 
+        link_tag = blockquote.find("a")
+        if link_tag and isinstance(link_tag, Tag) and not link_tag.get_text(strip=True):
+            href = link_tag.get("href")
+            if isinstance(href, str):
+                link_tag.string = href
+
         rendered_card_html = await scraper_service.render_twitter_card(
-            str(blockquote), script_html
+            str(blockquote), script_html_to_inject
         )
 
         if rendered_card_html:
@@ -238,18 +354,22 @@ async def _convert_twitter_cards(
 
 def _unwrap_anchored_media(soup: BeautifulSoup):
     """
-    CheerioのunwrapAnchoredMediaをBeautifulSoupで再現。
     メディアへのリンクやメディアを内包する要素を、単一の<img>または<video>タグに置き換える。
     """
     for elem in soup.select("a, p, div.wp-video"):
         if not isinstance(elem, Tag):
             continue
 
+        if elem.find("iframe"):
+            continue
+
         url = ""
 
         if elem.name == "a":
             href_val = elem.get("href")
-            href = href_val.strip() if isinstance(href_val, str) else ""
+            href = ""
+            if isinstance(href_val, str):
+                href = href_val.strip()
             url_found = False
 
             try:
@@ -258,9 +378,9 @@ def _unwrap_anchored_media(soup: BeautifulSoup):
                     params = parse_qs(parsed_url.query)
                     for values in params.values():
                         for value in values:
-                            if value.lower().startswith("http") and MEDIA_RE.search(
-                                value
-                            ):
+                            if value.lower().startswith(
+                                "http"
+                            ) and config.MEDIA_RE.search(value):
                                 url = value
                                 url_found = True
                                 break
@@ -269,7 +389,7 @@ def _unwrap_anchored_media(soup: BeautifulSoup):
             except Exception:
                 pass
 
-            if not url_found and MEDIA_RE.search(href):
+            if not url_found and config.MEDIA_RE.search(href):
                 url = href
                 url_found = True
 
@@ -283,7 +403,7 @@ def _unwrap_anchored_media(soup: BeautifulSoup):
 
             if not url_found:
                 text_content = elem.get_text(strip=True)
-                if text_content.lower().startswith("http") and MEDIA_RE.search(
+                if text_content.lower().startswith("http") and config.MEDIA_RE.search(
                     text_content
                 ):
                     url = text_content
@@ -301,8 +421,16 @@ def _unwrap_anchored_media(soup: BeautifulSoup):
                         url = found_url
                         break
 
-        if url and MEDIA_RE.search(url):
-            if VIDEO_RE.search(url):
+        # --- ここから修正 ---
+        if url and config.MEDIA_RE.search(url):
+            # URLのパス部分を取得し、動画拡張子で終わるかチェック
+            path_lower = urlparse(url).path.lower()
+            is_video_by_extension = path_lower.endswith(
+                (".mp4", ".webm", ".mov", ".ogv")
+            )
+
+            # 正規表現での判定、または拡張子での判定がTrueならビデオとみなす
+            if config.VIDEO_RE.search(url) or is_video_by_extension:
                 new_tag = soup.new_tag(
                     "video",
                     attrs={
@@ -311,6 +439,8 @@ def _unwrap_anchored_media(soup: BeautifulSoup):
                         "playsinline": "",
                         "style": "width:100%;height:auto;display:block;",
                         "class": "my-formatted",
+                        "loading": "lazy",
+                        "referrerpolicy": "no-referrer",
                     },
                 )
             else:
@@ -385,22 +515,29 @@ def _check_paging_contents(soup: BeautifulSoup) -> bool:
     HTMLコンテンツを分析し、特定のセレクタの出現回数が条件を満たしていれば
     次ページが存在し、ページング処理が可能と判断する。
     """
-    return (
-        len(soup.select("div#article-contents")) == 1
-        and len(soup.select("div.article-body")) == 1
-        and len(soup.select("div.article-inner-pager")) == 2
-        and len(soup.select("p.next > a.pagingNav")) == 1
-    )
+    if not soup:
+        logger.error("Null soup")
+        return False
+
+    div_contents = len(soup.select("div#article-contents"))
+    div_article_bodies = len(soup.select("div.article-body"))
+    # div_inner_pagers = len(soup.select("div.article-inner-pager"))
+    a_pagingNav = len(soup.select("p.next > a.pagingNav"))
+
+    # logger.info(f"div#article-contents => {div_contents}")
+    # logger.info(f"div_article_bodies => {div_article_bodies}")
+    # logger.info(f"div_inner_pagers => {div_inner_pagers}")
+    # logger.info(f"a_pagingNav => {a_pagingNav}")
+
+    return div_contents >= 1 and div_article_bodies >= 1 and a_pagingNav >= 1
 
 
 async def _process_paging(soup: BeautifulSoup, page_url: str) -> None:
     """
     次ページが出現しなくなるまで、 div#article-contents の子要素に次ページで獲得したコンテンツの内容を追加、拡張する
     """
-    # 2ページ目以降のコンテンツを格納するリスト
     next_page_contents: List[PageElement] = []
 
-    # 次ページのURLを取得
     next_page_link = soup.select_one("p.next > a.pagingNav")
 
     current_url = page_url
@@ -411,9 +548,8 @@ async def _process_paging(soup: BeautifulSoup, page_url: str) -> None:
             break
 
         next_page_url = urljoin(current_url, href)
-        logger.info(f"次のページを取得中: {next_page_url}")
+        # logger.info(f"次のページを取得中: {next_page_url}")
 
-        # 次のページのHTMLを取得
         next_page_html = await fetch_html_text(next_page_url, "mobile")
         if not next_page_html:
             logger.warning(f"ページの取得に失敗しました: {next_page_url}")
@@ -462,7 +598,9 @@ async def process_article_html(
     _unwrap_anchored_media(soup)
     _convert_video_js(soup)
     _unwrap_imgur(soup)
+    _normalize_iframes(soup, allow_hosts)
     _normalize_images(soup)
     _cleanup_empty_tags(soup)
+    _collapse_excessive_brs(soup)
 
     return str(soup.prettify(formatter="html5"))

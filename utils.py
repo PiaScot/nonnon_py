@@ -4,30 +4,17 @@ from typing import Literal
 
 import httpx
 from loguru import logger
-
-PC_USER_AGENTS = [
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0 Safari/537.36",
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_5) Gecko/20100101 Firefox/126.0",
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_5) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Safari/605.1.15",
-]
-
-MOBILE_USER_AGENTS = [
-    "Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Mobile/15E148 Safari/604.1",
-    "Mozilla/5.0 (Linux; Android 14; Pixel 8 Pro) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.6367.78 Mobile Safari/537.36",
-    "Mozilla/5.0 (Android 14; Mobile; rv:126.0) Gecko/126.0 Firefox/126.0",
-    "Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) CriOS/124.0.6367.62 Mobile/15E148 Safari/604.1",
-    "Mozilla/5.0 (Linux; Android 14; Samsung Galaxy S23) AppleWebKit/537.36 (KHTML, like Gecko) SamsungBrowser/25.0 Chrome/124.0.6367.78 Mobile Safari/537.36",
-]
+import config
 
 
 def random_pc_ua() -> str:
     """Returns a random PC user-agent string."""
-    return random.choice(PC_USER_AGENTS)
+    return random.choice(config.PC_USER_AGENTS)
 
 
 def random_mobile_ua() -> str:
     """Returns a random mobile user-agent string."""
-    return random.choice(MOBILE_USER_AGENTS)
+    return random.choice(config.MOBILE_USER_AGENTS)
 
 
 def _remove_duplicate_empty_line(text: str) -> str:

@@ -12,8 +12,8 @@ from extract import process_article_html
 from logger import logger
 from models import Article, Site
 from playw import ScraperService
+from repositories import ArticleRepository
 from utils import fetch_html_text, random_mobile_ua
-from repositories import _insert_articles, _check_has_article_by_url
 
 
 async def scrape_site(
@@ -21,6 +21,7 @@ async def scrape_site(
     site: Site,
     general_remove_tags: List[str],
     allowed_hosts: Set[str],
+    article_repo: ArticleRepository,
 ) -> Tuple[int, int]:
     """Orchestrates the scraping process for a single site."""
     if not site.rss or not site.domain:
@@ -32,14 +33,14 @@ async def scrape_site(
         return (0, 0)
 
     articles_to_insert = await process_feed_entries(
-        scraper_service, feed, site, general_remove_tags, allowed_hosts
+        scraper_service, feed, site, general_remove_tags, allowed_hosts, article_repo
     )
 
     if not articles_to_insert:
-        logger.warning(f"No new articles to insert for site: {site.title}")
+        logger.info(f"No new articles to insert for site: {site.title}")
         return (0, 0)
 
-    count = await _insert_articles(articles_to_insert)
+    count = await article_repo.insert_many(articles_to_insert)
     return (count, len(articles_to_insert))
 
 
@@ -70,6 +71,7 @@ async def process_feed_entries(
     site: Site,
     general_remove_tags: List[str],
     allowed_hosts: Set[str],
+    article_repo: ArticleRepository,
 ) -> List[Dict[str, Any]]:
     """Processes each entry in the RSS feed and returns a list of articles to insert."""
     articles_to_insert = []
@@ -80,7 +82,7 @@ async def process_feed_entries(
         if not link:
             continue
 
-        if await _check_has_article_by_url(link):
+        if await article_repo.check_exists_by_url(link):
             logger.info(f"Article already exists, skipping. URL: {link}")
             continue
 
@@ -110,14 +112,18 @@ async def process_single_article(
     if not mobile_html:
         return None
 
-    remove_selectors = []
-    if site.scrape_options:
-        remove_selectors = site.scrape_options.removeSelectorTags or []
+    remove_selectors = (
+        site.scrape_options.remove_selector_tags if site.scrape_options else []
+    )
 
     final_remove_selectors = list(set(general_remove_tags + remove_selectors))
 
     content = await process_article_html(
-        mobile_html, link, final_remove_selectors, allowed_hosts, scraper_service
+        mobile_html,
+        link,
+        final_remove_selectors,
+        allowed_hosts,
+        scraper_service,
     )
     if not content:
         logger.error(f"Failed to extract content for: {link}")

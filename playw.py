@@ -10,8 +10,7 @@ from playwright.async_api import (
 )
 from logger import logger
 from utils import random_mobile_ua
-
-ALLOWED_SCRIPT_HOSTS = {"twitter.com", "platform.twitter.com"}
+import config
 
 
 async def handle_route(route: Route) -> None:
@@ -23,7 +22,7 @@ async def handle_route(route: Route) -> None:
     if resource_type == "script":
         try:
             hostname = urlparse(url).hostname
-            if hostname and hostname in ALLOWED_SCRIPT_HOSTS:
+            if hostname and hostname in config.ALLOWED_SCRIPT_HOSTS:
                 logger.debug(f"Allowing whitelisted script: {url}")
                 await route.continue_()
                 return
@@ -79,20 +78,15 @@ class ScraperService:
         for blockquote in blockquotes_to_process:
             if not isinstance(blockquote, Tag):
                 continue
-            # --- ▼ 修正点 ▼ ---
-            # blockquote内のaタグが空の場合、hrefのURLをテキストとして挿入する
             link_tag = blockquote.find("a")
-            # aタグが存在し、かつその中身が空（スペースなども除く）の場合
             if (
                 link_tag
                 and isinstance(link_tag, Tag)
                 and not link_tag.get_text(strip=True)
             ):
                 href = link_tag.get("href")
-                # hrefがあれば、それをテキストとして設定
                 if isinstance(href, str):
                     link_tag.string = href
-            # --- ▲ 修正ここまで ▲ ---
 
             rendered_card_html = await self.render_twitter_card(
                 str(blockquote), script_html
@@ -107,48 +101,137 @@ class ScraperService:
         ):
             script.decompose()
 
+    # async def render_twitter_card(
+    #     self, blockquote_html: str, script_html: str
+    # ) -> Optional[str]:
+    #     """
+    #     単一のTwitterカード（blockquote）をレンダリングして、そのHTMLを返す。
+    #     """
+    #     if not self.browser:
+    #         raise RuntimeError("ScraperService has not been started.")
+    #
+    #     full_html = f"""
+    #     <!DOCTYPE html>
+    #     <html>
+    #     <head>
+    #         <meta charset="utf-8">
+    #         <title>Twitter Card Render</title>
+    #     </head>
+    #     <body>
+    #         {blockquote_html}
+    #         {script_html}
+    #     </body>
+    #     </html>
+    #     """
+    #     context = None
+    #     try:
+    #         context = await self.browser.new_context(user_agent=random_mobile_ua())
+    #         page = await context.new_page()
+    #         await page.set_content(full_html, wait_until="domcontentloaded")
+    #
+    #         rendered_iframe_selector = "iframe[data-tweet-id]"
+    #         await page.wait_for_selector(rendered_iframe_selector, timeout=15000)
+    #
+    #         content = await page.content()
+    #         soup = BeautifulSoup(content, "html.parser")
+    #         return str(soup.body)
+    #
+    #     except Exception as e:
+    #         logger.warning(f"Failed to render twitter card: {e}")
+    #         return None
+    #     finally:
+    #         if context:
+    #             await context.close()
+
+    # playw.py 内の render_twitter_card 関数
+
     async def render_twitter_card(
         self, blockquote_html: str, script_html: str
     ) -> Optional[str]:
         """
-        単一のTwitterカード（blockquote）をレンダリングして、そのHTMLを返す。
+        与えられたblockquoteからレンダリングされたTwitterカードのHTMLを生成する。
+        iframe内のコンテンツの高さを測定し、動的に高さを設定する。
         """
-        if not self.browser:
+        if not self.browser or not self.playwright:
             raise RuntimeError("ScraperService has not been started.")
 
-        full_html = f"""
-        <!DOCTYPE html>
-        <html>
-        <head>
-            <meta charset="utf-8">
-            <title>Twitter Card Render</title>
-        </head>
-        <body>
-            {blockquote_html}
-            {script_html}
-        </body>
-        </html>
+        HTML_TEMPLATE = f"""
+        <!DOCTYPE html><html><head><meta charset="utf-8">
+        <title>Twitter Card Renderer</title></head>
+        <body>{blockquote_html}{script_html}</body></html>
         """
+
         context = None
         try:
-            context = await self.browser.new_context(user_agent=random_mobile_ua())
+            device_settings = self.playwright.devices["iPhone 14"]
+            context_options = {
+                **device_settings,
+                "locale": "ja-JP",
+                "timezone_id": "Asia/Tokyo",
+            }
+            context = await self.browser.new_context(**context_options)
             page = await context.new_page()
-            await page.set_content(full_html, wait_until="domcontentloaded")
+            await page.set_content(HTML_TEMPLATE)
 
-            # レンダリングされたiframeを待つ
             rendered_iframe_selector = "iframe[data-tweet-id]"
             await page.wait_for_selector(rendered_iframe_selector, timeout=15000)
+            iframe_handle = await page.query_selector(rendered_iframe_selector)
 
-            # iframe内のコンテンツを取得しようとすると複雑になるため、
-            # ここではレンダリングが完了した後のコンテナ要素を取得する
-            # 親要素や特定のラッパー要素などをセレクタで指定する
-            # この例では body 全体を返す
-            content = await page.content()
-            soup = BeautifulSoup(content, "html.parser")
-            return str(soup.body)
+            if not iframe_handle:
+                return None
+
+            iframe_content = await iframe_handle.content_frame()
+            if not iframe_content:
+                logger.warning("Could not get iframe content frame.")
+                return None
+
+            await iframe_content.wait_for_load_state()
+
+            article_locator = iframe_content.locator("article")
+            if await article_locator.count() == 0:
+                logger.warning("Tweet seems to be deleted (no <article> tag found).")
+                return None
+
+            content_height = await iframe_content.evaluate(
+                "() => document.body.scrollHeight"
+            )
+            if not content_height or content_height < 100:
+                content_height = 275
+
+            # --- ここからが修正点 ---
+
+            # 測定した高さに25%の余分な高さを追加し、整数に丸める
+            final_height = round(content_height * 1.15)
+
+            # logger.info(
+            #     f"Original height: {content_height}px, Final height (+25%): {final_height}px"
+            # )
+
+            return await iframe_handle.evaluate(
+                """(element, measuredHeight) => {
+                    const parentDiv = element.parentElement;
+                    if (parentDiv) {
+                        parentDiv.style.width = 'auto';
+                        parentDiv.style.height = 'auto';
+                        parentDiv.style.maxWidth = '100%';
+                        parentDiv.style.marginTop = '12px';
+                    }
+                    element.style.width = '100%';
+                    
+                    // 変更後の高さをピクセル単位で設定
+                    element.style.height = measuredHeight + 'px';
+                    
+                    element.style.border = 'none';
+                    
+                    return parentDiv ? parentDiv.outerHTML : element.outerHTML;
+                }""",
+                # 渡す変数を変更後の final_height にする
+                final_height,
+            )
+            # --- ここまでが修正点 ---
 
         except Exception as e:
-            logger.warning(f"Failed to render twitter card: {e}")
+            logger.warning(f"Failed to render Twitter card: {e}")
             return None
         finally:
             if context:

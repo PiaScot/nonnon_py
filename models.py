@@ -1,10 +1,11 @@
+from datetime import datetime
 from typing import List, Literal, Optional
 
 from pydantic import BaseModel, Field
 
 
 class ScrapeOptions(BaseModel):
-    removeSelectorTags: List[str] = Field(default_factory=list)
+    remove_selector_tags: List[str] = Field(default_factory=list)
     display_mode: Literal["in_app", "direct_link"] = "in_app"
 
 
@@ -30,3 +31,23 @@ class Article(BaseModel):
     pub_date: str
     thumbnail: str = ""
     created_at: Optional[str] = None
+
+
+class BakusaiResInfo(BaseModel):
+    res_id: int
+    reply_to_id: Optional[int] = None
+    comment_time: datetime
+    comment_text: str
+    typed_name: str
+
+
+class BakusaiThreadInfo(BaseModel):
+    id: Optional[int] = None
+    category: Optional[str] = None
+    name: str
+    number: int
+    link: str
+    last_commented: datetime
+    viewer: int
+    res_count: int
+    comments: List[BakusaiResInfo] = Field(default_factory=list)

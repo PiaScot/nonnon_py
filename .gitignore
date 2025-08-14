@@ -19,11 +19,16 @@ cli_search.py
 next_page_check.py
 analysis_bs.py
 
+# test feature
+main_extract.py
+bakusai.py
+
 # other
 README.md
 tmp.html
 trace.zip
 *.log
+*.html
 /results/
 /supabase/
 /instructions/

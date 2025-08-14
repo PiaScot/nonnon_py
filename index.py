@@ -4,10 +4,9 @@ from typing import List, Set, NamedTuple
 from logger import logger
 from models import Site
 from repositories import (
-    _get_allowed_hosts,
-    _get_general_remove_tags,
-    _get_sites_to_scrape,
-    _update_site_last_access,
+    ArticleRepository,
+    SiteRepository,
+    ConfigRepository,
 )
 from scraper import scrape_site
 from services import maintain_article_limit
@@ -20,17 +19,19 @@ class ScrapingContext(NamedTuple):
     allowed_hosts: Set[str]
 
 
-async def prepare() -> ScrapingContext | None:
+async def prepare(
+    site_repo: SiteRepository, config_repo: ConfigRepository
+) -> ScrapingContext | None:
     """DBからスクレイピングに必要なデータをすべて取得・準備する"""
     logger.info("Preparing data for scraping...")
 
-    allowed_hosts = await _get_allowed_hosts()
+    allowed_hosts = await config_repo.get_allowed_hosts()
     logger.info(f"Loaded {len(allowed_hosts)} allowed hosts.")
 
-    general_remove_tags = await _get_general_remove_tags()
+    general_remove_tags = await config_repo.get_general_remove_tags()
     logger.info(f"Loaded {len(general_remove_tags)} general remove tags.")
 
-    sites_to_scrape = await _get_sites_to_scrape()
+    sites_to_scrape = await site_repo.get_sites_to_scrape()
     if not sites_to_scrape:
         logger.info("No sites to scrape at this time.")
         return None
@@ -44,10 +45,14 @@ async def run() -> None:
     logger.info("🚀 Starting scraping process...")
 
     scraper_service = ScraperService()
+    article_repo = ArticleRepository()
+    site_repo = SiteRepository()
+    config_repo = ConfigRepository()
+
     try:
         await scraper_service.start()
 
-        context = await prepare()
+        context = await prepare(site_repo, config_repo)
         if context is None:
             return
 
@@ -62,7 +67,7 @@ async def run() -> None:
         tasks = [
             asyncio.create_task(
                 scrape_site_and_update_timestamp(
-                    scraper_service, site, general_tags, hosts
+                    scraper_service, site, general_tags, hosts, article_repo, site_repo
                 )
             )
             for site in sites
@@ -85,17 +90,19 @@ async def scrape_site_and_update_timestamp(
     site: Site,
     general_tags: List[str],
     allowed_hosts: Set[str],
+    article_repo: ArticleRepository,
+    site_repo: SiteRepository,
 ) -> int:
     """単一サイトをスクレイピングし、最終アクセス時刻を更新する"""
     try:
         inserted_count, got_articles_num = await scrape_site(
-            scraper_service, site, general_tags, allowed_hosts
+            scraper_service, site, general_tags, allowed_hosts, article_repo
         )
         if inserted_count >= 0:
             logger.info(
                 f"{site.id} {site.title}: Inserted data({inserted_count}) got articles({got_articles_num})"
             )
-            await _update_site_last_access(site.id)
+            await site_repo.update_last_access(site.id)
             logger.info(
                 f"✅ Successfully scraped and updated timestamp for site ID: {site.id} ({site.title})"
             )

@@ -1,15 +1,6 @@
 from logger import logger
-
-from repositories import (
-    _get_total_article_count,
-    _get_bookmarked_article_ids,
-    _fetch_oldest_article_ids,
-    _delete_articles_by_ids,
-)
-
-
-MAX_ARTICLES = 10000
-BATCH_SIZE = 500
+from repositories import ArticleRepository, BookmarkRepository
+import config
 
 
 async def maintain_article_limit() -> None:
@@ -19,35 +10,41 @@ async def maintain_article_limit() -> None:
     """
     logger.info("Starting to check and maintain article limit...")
     try:
-        all_count = await _get_total_article_count()
-        if all_count <= MAX_ARTICLES:
+        article_repo = ArticleRepository()
+        bookmark_repo = BookmarkRepository()
+
+        all_count = await article_repo.get_total_count()
+        if all_count <= config.MAX_ARTICLES:
             logger.info(
                 "The number of articles is within the limit. No cleanup needed."
             )
             return
 
-        logger.info(f"article all num => {all_count}")
+        logger.info(
+            f"Article count ({all_count}) exceeds limit ({config.MAX_ARTICLES})."
+        )
 
-        articles_to_delete_count = all_count - MAX_ARTICLES
-        bookmarked_ids = await _get_bookmarked_article_ids()
+        articles_to_delete_count = all_count - config.MAX_ARTICLES
+        bookmarked_ids = await bookmark_repo.get_bookmarked_ids()
 
-        logger.info(f"bookmarked_ids => {bookmarked_ids}")
-        logger.info(f"articles_to_delete_count => {articles_to_delete_count}")
+        logger.info(f"Found {len(bookmarked_ids)} bookmarked articles to exclude.")
+        logger.info(f"Need to delete {articles_to_delete_count} articles.")
 
-        stale_articles_id = await _fetch_oldest_article_ids(
+        stale_article_ids = await article_repo.fetch_oldest_ids(
             articles_to_delete_count, exclude_ids=bookmarked_ids
         )
 
-        logger.info(f"stale_articles_id => {stale_articles_id}")
-        if not stale_articles_id:
+        if not stale_article_ids:
             logger.info("No un-bookmarked old articles found to delete.")
             return
 
-        delete_count = await _delete_articles_by_ids(stale_articles_id)
+        logger.info(f"Found {len(stale_article_ids)} stale articles to delete.")
+        delete_count = await article_repo.delete_by_ids(stale_article_ids)
+
         if delete_count > 0:
             logger.info(f"Successfully deleted {delete_count} articles.")
         else:
-            logger.error(f"Failed to delete article ids: {stale_articles_id}")
+            logger.warning(f"Failed to delete article IDs: {stale_article_ids}")
 
     except Exception as e:
         logger.error(f"Error in maintain_article_limit: {str(e)}", exc_info=True)
